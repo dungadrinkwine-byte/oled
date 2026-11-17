@@ -277,9 +277,8 @@ static void Packet_Task(void)
   Status_Send();
 }
 
-/* 画一行：不足 16 字符用空格补齐，把整行 128 像素全部覆盖一遍。
-   这里不做“内容没变就跳过”的优化——一旦某次写入失败导致屏幕与缓存不一致，
-   跳过逻辑会让残字永远留在屏上；四行整屏重画约 4 ms，代价可以忽略。 */
+/* 画一行：不足 16 字符用空格补齐，写进 RAM 帧缓冲（不直接发 I2C）。
+   补齐是为了让整行 128 像素都被有效内容覆盖；真正推屏由 OLED_Flush() 一次完成。 */
 static void Display_Line(uint8_t line, const char *text)
 {
   char    buf[OLED_COL_MAX + 1U];
@@ -296,12 +295,14 @@ static void Display_Line(uint8_t line, const char *text)
   }
   buf[OLED_COL_MAX] = '\0';
 
-  OLED_ShowString(line, 1U, buf);
+  OLED_BufString(line, 1U, buf);
 }
 
 static void Display_Refresh(void)
 {
   char buf[OLED_COL_MAX + 1U];
+
+  OLED_BufClear();                            /* 整帧从全 0 开始拼 */
 
   (void)snprintf(buf, sizeof(buf), "STATE: %s", (s_run != 0U) ? "RUN" : "PAUSE");
   Display_Line(1U, buf);
@@ -314,6 +315,8 @@ static void Display_Refresh(void)
 
   (void)snprintf(buf, sizeof(buf), "LED: %u", (unsigned int)(s_ledIndex + 1U));
   Display_Line(4U, buf);
+
+  OLED_Flush();                               /* 8 页整块推送，每页一次传输 */
 }
 
 static void Display_Task(void)
@@ -406,25 +409,33 @@ int main(void)
   {
   }
 #elif (OLED_SELFTEST == 2)
-  /* 四行写满 16 列：正常应该看到连续的 0123456789ABCDEF。
-     末尾缺字符 = 那些列写不进去；出现错位 = 列寻址整体偏移。 */
+  /* 边框 + 四行 14 字符：边框把可见区四边标出来，用来判断
+     ① 屏幕可见宽度到底是不是 128 列（右边框应的外框之外还有没有像素）；
+     ② 16 列字符能不能完整写入（末尾缺字符 = 那些列写不进去）。 */
   {
-    char    test_line[OLED_COL_MAX + 1U];
-    uint8_t i;
+    uint8_t x, y, i;
 
-    for (i = 0U; i < OLED_COL_MAX; i++)
+    OLED_BufClear();
+
+    for (x = 0U; x < 128U; x++)               /* 上、下边框 */
     {
-      test_line[i] = "0123456789ABCDEF"[i];
+      OLED_BufPixel(x, 0U, 1U);
+      OLED_BufPixel(x, 63U, 1U);
     }
-    test_line[OLED_COL_MAX] = '\0';
+    for (y = 0U; y < 64U; y++)                /* 左、右边框 */
+    {
+      OLED_BufPixel(0U, y, 1U);
+      OLED_BufPixel(127U, y, 1U);
+    }
+    for (i = 0U; i < OLED_LINE_NUM; i++)
+    {
+      OLED_BufString((uint8_t)(i + 1U), 2U, "0123456789ABCD");
+    }
+
+    OLED_Flush();
 
     for (;;)
     {
-      for (i = 0U; i < OLED_LINE_NUM; i++)
-      {
-        OLED_ShowString((uint8_t)(i + 1U), 1U, test_line);
-      }
-      HAL_Delay(500U);
     }
   }
 #endif

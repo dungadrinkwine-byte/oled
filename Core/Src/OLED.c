@@ -1,5 +1,6 @@
 #include "stm32f1xx_hal.h"
 #include "OLED_Font.h"
+#include <string.h>
 
 /*引脚配置*/
 #define OLED_W_SCL(x)		HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, (GPIO_PinState)(x))
@@ -100,6 +101,30 @@ void OLED_WriteData(uint8_t Data)
 }
 
 /**
+  * @brief  OLED连续写多个数据字节（一次传输写一整页）
+  * @param  Data 数据首地址
+  * @param  Len  字节数
+  * @retval 无
+  * @note   原来的 OLED_WriteData 每写 1 个字节就要 一次 Start/地址/控制字/Stop，
+  *         写满一页 132 列要开 132 次传输。改成整页一次传输后，写一页只要一次
+  *         Start...Stop，速度提高约 30 倍，也消除了“逐字节传输被打断导致整页
+  *         写入不完整”的可能。
+  */
+void OLED_WriteMulti(const uint8_t *Data, uint16_t Len)
+{
+	uint16_t i;
+
+	OLED_I2C_Start();
+	OLED_I2C_SendByte(0x78);		//从机地址
+	OLED_I2C_SendByte(0x40);		//写数据
+	for (i = 0; i < Len; i++)
+	{
+		OLED_I2C_SendByte(Data[i]);
+	}
+	OLED_I2C_Stop();
+}
+
+/**
   * @brief  OLED设置光标位置
   * @param  Y 以左上角为原点，向下方向的坐标，范围：0~7
   * @param  X 以左上角为原点，向右方向的坐标，范围：0~127
@@ -124,14 +149,13 @@ void OLED_SetCursor(uint8_t Y, uint8_t X)
   */
 void OLED_Clear(void)
 {
-	uint8_t i, j;
-	for (j = 0; j < 8; j++)
+	static const uint8_t s_zero[OLED_RAM_WIDTH] = {0};
+	uint8_t page;
+
+	for (page = 0; page < 8; page++)
 	{
-		OLED_SetCursor(j, 0);
-		for(i = 0; i < OLED_RAM_WIDTH; i++)
-		{
-			OLED_WriteData(0x00);
-		}
+		OLED_SetCursor(page, 0);
+		OLED_WriteMulti(s_zero, OLED_RAM_WIDTH);
 	}
 }
 
@@ -329,4 +353,117 @@ void OLED_Init(void)
 	OLED_WriteCommand(0xAF);	//开启显示
 		
 	OLED_Clear();				//OLED清屏
+}
+
+/* ====================== 帧缓冲显示（推荐使用） ======================
+   问题背景：原来的写法是“每写一个像素列就重新设一次光标、发一次 I2C 传输”，
+   整屏 8 页 × 128 列 = 1024 次独立传输。任何一次传输被干扰或地址写错，那一列
+   就会留下旧数据，表现为屏幕上一条固定位置的噪点/残字，而且无法自愈。
+   现在改成：先在 RAM 里把整帧 8×132 拼好，再按页整块写入。每一帧都把可见区
+   的每一个字节显式写一遍（空白处就是 0x00），所以屏幕上不会出现“没写到的列”。
+   使用顺序：OLED_BufClear() -> OLED_BufString()/OLED_BufPixel() -> OLED_Flush()。 */
+
+#define OLED_PAGE_NUM		8
+#define OLED_WIDTH			128
+
+static uint8_t s_gram[OLED_PAGE_NUM][OLED_RAM_WIDTH];
+
+/**
+  * @brief  清空帧缓冲（只改 RAM，不动屏幕）
+  */
+void OLED_BufClear(void)
+{
+	uint8_t page;
+	uint16_t col;
+
+	for (page = 0; page < OLED_PAGE_NUM; page++)
+	{
+		for (col = 0; col < OLED_RAM_WIDTH; col++)
+		{
+			s_gram[page][col] = 0x00;
+		}
+	}
+}
+
+/**
+  * @brief  在帧缓冲里画一个像素
+  * @param  X 横坐标 0~127，Y 纵坐标 0~63，On 1 点亮 / 0 熄灭
+  */
+void OLED_BufPixel(uint8_t X, uint8_t Y, uint8_t On)
+{
+	if ((X >= OLED_WIDTH) || (Y >= 64))
+	{
+		return;
+	}
+
+	if (On != 0)
+	{
+		s_gram[Y >> 3][X] |= (uint8_t)(1U << (Y & 0x07));
+	}
+	else
+	{
+		s_gram[Y >> 3][X] &= (uint8_t)~(1U << (Y & 0x07));
+	}
+}
+
+/**
+  * @brief  在帧缓冲里写一个 8×16 字符
+  * @param  Line 行 1~4，Column 列 1~16
+  */
+void OLED_BufChar(uint8_t Line, uint8_t Column, char Char)
+{
+	const uint8_t *glyph;
+	uint8_t page, x, i;
+
+	if ((Line < 1U) || (Line > 4U) || (Column < 1U) || (Column > 16U))
+	{
+		return;
+	}
+	if ((Char < ' ') || (Char > '~'))		/* 字模只覆盖 0x20~0x7E */
+	{
+		Char = ' ';
+	}
+
+	glyph = OLED_F8x16[Char - ' '];
+	page  = (uint8_t)((Line - 1U) * 2U);
+	x     = (uint8_t)((Column - 1U) * 8U);
+
+	for (i = 0; i < 8U; i++)
+	{
+		s_gram[page][x + i]     = glyph[i];			/* 上半部分 */
+		s_gram[page + 1U][x + i] = glyph[i + 8U];	/* 下半部分 */
+	}
+}
+
+/**
+  * @brief  在帧缓冲里写字符串（不检查是否超出 16 列，超出部分会被裁掉）
+  */
+void OLED_BufString(uint8_t Line, uint8_t Column, const char *String)
+{
+	uint8_t i;
+
+	for (i = 0; String[i] != '\0'; i++)
+	{
+		if ((uint8_t)(Column + i) > 16U)
+		{
+			break;
+		}
+		OLED_BufChar(Line, (uint8_t)(Column + i), String[i]);
+	}
+}
+
+/**
+  * @brief  把帧缓冲整屏推给屏幕：8 页，每页一次 I2C 传输、132 字节
+  * @note   132 字节覆盖 1.3 寸（132 列显存）多出的 4 列；0.96 寸屏多写的
+  *         4 个 0x00 会绕回本页最左侧，写的仍是 0x00，不影响画面。
+  */
+void OLED_Flush(void)
+{
+	uint8_t page;
+
+	for (page = 0; page < OLED_PAGE_NUM; page++)
+	{
+		OLED_SetCursor(page, 0);
+		OLED_WriteMulti(s_gram[page], OLED_RAM_WIDTH);
+	}
 }
