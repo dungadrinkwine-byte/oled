@@ -7,7 +7,6 @@ void OLED_Init(void);
 void OLED_Clear(void);
 void OLED_WriteMulti(const uint8_t *Data, uint16_t Len);
 
-/* 帧缓冲方式：先拼帧，再整页刷新 */
 void OLED_BufClear(void);
 void OLED_BufPixel(uint8_t X, uint8_t Y, uint8_t On);
 void OLED_BufChar(uint8_t Line, uint8_t Column, char Char);
