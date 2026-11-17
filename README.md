@@ -284,7 +284,7 @@ cmake --build cmake-build-debug
 
 ## 十、演示视频
 
-待补充：`video/hw3_demo.mp4`
+视频文件：[`video/hw3_demo.mp4`](video/hw3_demo.mp4)（22 MB）
 
 建议一次录完，六个镜头正好覆盖验收标准四条。串口助手发送模式选 **HEX**、不加换行，接收模式用文本（GBK）。
 
