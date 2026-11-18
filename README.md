@@ -258,16 +258,7 @@ while ((HAL_GetTick() - tickstart) < Delay) { }
 
 顺带一提，如果显示刷新很慢（软件 I²C 整屏重画），也会造成可感知的延迟，所以显示部分只在状态变化时才重画，不做无意义的周期性刷屏；整屏刷新本身也优化成了一帧 8 次传输、约 1 ms。
 
-## 八、选做说明
-
-本次**未做**选做内容：
-
-- **DMA 发送反馈**：仍用 `HAL_UART_Transmit_IT()` 中断发送。反馈只有一行几十字节，中断发送每个字节进一次中断的开销完全可以接受；DMA 更适合长数据或高频上报。
-- **硬件 I²C 驱动 OLED**：仍用软件 I²C。
-
-如果后续要补 DMA，改动点是：`Status_Send()` 里换成 `HAL_UART_Transmit_DMA()`，`usart.c` 增加 `USART1_TX` 的 DMA 请求（F103C8 上是 DMA1 Channel4、Normal 模式、内存→外设、字节宽度），并关掉半传输中断 `__HAL_DMA_DISABLE_IT(huart1.hdmatx, DMA_IT_HT)`，完成回调仍用 `HAL_UART_TxCpltCallback()` 清忙标志。忙/待发那套逻辑可以原样保留。
-
-## 九、编译与烧录
+## 八、编译与烧录
 
 工程由 STM32CubeMX 6.15.0 生成（`hw3.ioc`），用 CMake + arm-none-eabi-gcc 构建，可以直接用 CLion 打开：
 
@@ -282,7 +273,7 @@ cmake -G Ninja -DCMAKE_BUILD_TYPE=Debug -B cmake-build-debug -S .
 cmake --build cmake-build-debug
 ```
 
-## 十、演示视频
+## 九、演示视频
 
 视频文件：[`video/hw3_demo.mp4`](video/hw3_demo.mp4)（22 MB）
 
